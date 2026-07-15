@@ -109,13 +109,13 @@
   </div>
 
   <canvas id="tempChart" height="80"></canvas>
-  <button onclick="charts.temp.resetZoom()" style="margin-bottom:16px;">Reset zoom (18h view)</button>
+  <button onclick="resetChartZoom(charts.temp)" style="margin-bottom:16px;">Reset zoom (18h view)</button>
 
   <canvas id="humChart" height="80"></canvas>
-  <button onclick="charts.hum.resetZoom()" style="margin-bottom:16px;">Reset zoom (18h view)</button>
+  <button onclick="resetChartZoom(charts.hum)" style="margin-bottom:16px;">Reset zoom (18h view)</button>
 
   <canvas id="vpdChart" height="80"></canvas>
-  <button onclick="charts.vpd.resetZoom()" style="margin-bottom:16px;">Reset zoom (18h view)</button>
+  <button onclick="resetChartZoom(charts.vpd)" style="margin-bottom:16px;">Reset zoom (18h view)</button>
 
   <div class="settings-card">
     <h3 style="margin-top:0;">Setpoints</h3>
@@ -201,6 +201,30 @@ function authFetch(url, opts = {}) {
 const WINDOW_HOURS = 18;      // default visible window
 const LOAD_HOURS = 72;        // how much history is loaded so panning has data to reveal
 
+function resetChartZoom(chart) {
+  chart.resetZoom();
+  chart.options.scales.y.min = undefined;
+  chart.options.scales.y.max = undefined;
+  chart.update('none');
+}
+
+function rescaleYToVisibleRange(chart) {
+  const xScale = chart.scales.x;
+  const [xMin, xMax] = [xScale.min, xScale.max];
+  const points = chart.data.datasets[0].data.filter(p => {
+    const t = p.x instanceof Date ? p.x.getTime() : p.x;
+    return t >= xMin && t <= xMax;
+  });
+  if (points.length === 0) return;
+  const values = points.map(p => p.y);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const padding = (max - min) * 0.1 || 1; // 10% padding, or 1 unit if flat
+  chart.options.scales.y.min = min - padding;
+  chart.options.scales.y.max = max + padding;
+  chart.update('none');
+}
+
 function buildScaleOpts() {
   const now = new Date();
   const windowStart = new Date(now.getTime() - WINDOW_HOURS * 3600 * 1000);
@@ -213,7 +237,7 @@ function buildScaleOpts() {
     scales: {
       x: {
         type: 'time',
-        time: { unit: 'hour' },
+        time: { minUnit: 'second' }, // let Chart.js pick appropriate granularity as you zoom in
         min: windowStart,
         max: now,
         ticks: { color: '#8ba394' }
@@ -224,8 +248,17 @@ function buildScaleOpts() {
       legend: { labels: { color: '#e7efe9' } },
       zoom: {
         limits: { x: { min: loadStart.getTime(), max: now.getTime() } },
-        zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'x' },
-        pan: { enabled: true, mode: 'x' }
+        zoom: {
+          wheel: { enabled: true },
+          pinch: { enabled: true },
+          mode: 'x',
+          onZoomComplete: ({ chart }) => rescaleYToVisibleRange(chart)
+        },
+        pan: {
+          enabled: true,
+          mode: 'x',
+          onPanComplete: ({ chart }) => rescaleYToVisibleRange(chart)
+        }
       }
     }
   };
