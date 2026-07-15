@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Greenhouse Controller</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 <style>
   :root {
     --bg: #0f1512;
@@ -107,8 +108,11 @@
   </div>
 
   <canvas id="tempChart" height="80"></canvas>
+  <button onclick="charts.temp.resetZoom()" style="margin-bottom:16px;">Reset zoom</button>
   <canvas id="humChart" height="80"></canvas>
+  <button onclick="charts.temp.resetZoom()" style="margin-bottom:16px;">Reset zoom</button>
   <canvas id="vpdChart" height="80"></canvas>
+  <button onclick="charts.temp.resetZoom()" style="margin-bottom:16px;">Reset zoom</button>
 
   <div class="settings-card">
     <h3 style="margin-top:0;">Setpoints</h3>
@@ -199,8 +203,21 @@ function initCharts() {
     responsive: true,
     animation: false,
     scales: { x: { ticks: { color: '#8ba394' } }, y: { ticks: { color: '#8ba394' } } },
-    plugins: { legend: { labels: { color: '#e7efe9' } } }
-  };
+    plugins: {
+        legend: { labels: { color: '#e7efe9' } },
+        zoom: {
+            zoom: {
+                wheel: { enabled: true },
+                pinch: { enabled: true },
+                mode: 'x'
+            },
+            pan: {
+                enabled: true,
+                mode: 'x'
+            }
+        }
+    }
+};
   charts.temp = new Chart(ctxTemp, { type: 'line', data: { labels: [], datasets: [{ label: 'Temperature (°C)', data: [], borderColor: '#f87171', tension: 0.3 }] }, options: baseOpts });
   charts.hum = new Chart(ctxHum, { type: 'line', data: { labels: [], datasets: [{ label: 'Humidity (%)', data: [], borderColor: '#60a5fa', tension: 0.3 }] }, options: baseOpts });
   charts.vpd = new Chart(ctxVpd, { type: 'line', data: { labels: [], datasets: [{ label: 'VPD (kPa)', data: [], borderColor: '#4ade80', tension: 0.3 }] }, options: baseOpts });
