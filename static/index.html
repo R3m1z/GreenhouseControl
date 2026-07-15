@@ -108,14 +108,8 @@
     <div class="relay"><span class="dot" id="dotLights"></span> Lights</div>
   </div>
 
-  <canvas id="tempChart" height="80"></canvas>
-  <button onclick="resetChartZoom(charts.temp)" style="margin-bottom:16px;">Reset zoom (18h view)</button>
-
-  <canvas id="humChart" height="80"></canvas>
-  <button onclick="resetChartZoom(charts.hum)" style="margin-bottom:16px;">Reset zoom (18h view)</button>
-
-  <canvas id="vpdChart" height="80"></canvas>
-  <button onclick="resetChartZoom(charts.vpd)" style="margin-bottom:16px;">Reset zoom (18h view)</button>
+  <canvas id="mainChart" height="90"></canvas>
+  <button onclick="resetChartZoom()" style="margin-bottom:16px;">Reset zoom (24h view)</button>
 
   <div class="settings-card">
     <h3 style="margin-top:0;">Setpoints</h3>
@@ -190,6 +184,9 @@ function populateDevices(devices) {
 
 function switchDevice() {
   currentDevice = document.getElementById('deviceSelect').value;
+  if (mainChart) {
+    mainChart.data.datasets.forEach(ds => ds.data = []);
+  }
   refreshAll();
 }
 
@@ -198,79 +195,126 @@ function authFetch(url, opts = {}) {
   return fetch(url, opts);
 }
 
-const WINDOW_HOURS = 18;      // default visible window
-const LOAD_HOURS = 72;        // how much history is loaded so panning has data to reveal
+const WINDOW_HOURS = 24;      // default visible window (capped, shrinks if less data exists)
+const LOAD_HOURS = 96;        // how much history is loaded so panning has data to reveal
 
-function resetChartZoom(chart) {
-  chart.resetZoom();
-  chart.options.scales.y.min = undefined;
-  chart.options.scales.y.max = undefined;
-  chart.update('none');
-}
+let mainChart = null;
 
-function rescaleYToVisibleRange(chart) {
-  const xScale = chart.scales.x;
-  const [xMin, xMax] = [xScale.min, xScale.max];
-  const points = chart.data.datasets[0].data.filter(p => {
-    const t = p.x instanceof Date ? p.x.getTime() : p.x;
-    return t >= xMin && t <= xMax;
-  });
-  if (points.length === 0) return;
-  const values = points.map(p => p.y);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const padding = (max - min) * 0.1 || 1; // 10% padding, or 1 unit if flat
-  chart.options.scales.y.min = min - padding;
-  chart.options.scales.y.max = max + padding;
-  chart.update('none');
-}
+const METRICS = [
+  { key: 'temperature', label: 'Temperature (°C)', color: '#f87171', axis: 'yTemp' },
+  { key: 'humidity',    label: 'Humidity (%)',      color: '#60a5fa', axis: 'yHum'  },
+  { key: 'vpd',         label: 'VPD (kPa)',         color: '#4ade80', axis: 'yVpd'  }
+];
 
-function buildScaleOpts() {
+function computeDefaultRange(allPoints) {
   const now = new Date();
-  const windowStart = new Date(now.getTime() - WINDOW_HOURS * 3600 * 1000);
-  const loadStart = new Date(now.getTime() - LOAD_HOURS * 3600 * 1000);
+  if (!allPoints.length) {
+    return { min: new Date(now.getTime() - WINDOW_HOURS * 3600 * 1000), max: now };
+  }
+  const times = allPoints.map(p => p.x.getTime());
+  const earliest = Math.min(...times);
+  const latest = Math.max(...times);
+  const windowStart = Math.max(earliest, latest - WINDOW_HOURS * 3600 * 1000);
+  return { min: new Date(windowStart), max: new Date(latest) };
+}
 
-  return {
-    responsive: true,
-    animation: false,
-    parsing: false, // data already in {x, y} form
-    scales: {
-      x: {
-        type: 'time',
-        time: { minUnit: 'second' }, // let Chart.js pick appropriate granularity as you zoom in
-        min: windowStart,
-        max: now,
-        ticks: { color: '#8ba394' }
-      },
-      y: { ticks: { color: '#8ba394' } }
-    },
-    plugins: {
-      legend: { labels: { color: '#e7efe9' } },
-      zoom: {
-        limits: { x: { min: loadStart.getTime(), max: now.getTime() } },
-        zoom: {
-          wheel: { enabled: true },
-          pinch: { enabled: true },
-          mode: 'x',
-          onZoomComplete: ({ chart }) => rescaleYToVisibleRange(chart)
-        },
-        pan: {
-          enabled: true,
-          mode: 'x',
-          onPanComplete: ({ chart }) => rescaleYToVisibleRange(chart)
-        }
-      }
+function rescaleAxesToVisibleRange(chart, xMinOverride, xMaxOverride) {
+  const xMin = xMinOverride !== undefined ? xMinOverride : chart.scales.x.min;
+  const xMax = xMaxOverride !== undefined ? xMaxOverride : chart.scales.x.max;
+
+  chart.data.datasets.forEach(ds => {
+    const points = ds.data.filter(p => {
+      const t = p.x instanceof Date ? p.x.getTime() : p.x;
+      return t >= xMin && t <= xMax;
+    });
+    const axisId = ds.yAxisID;
+    if (points.length === 0) {
+      chart.options.scales[axisId].min = undefined;
+      chart.options.scales[axisId].max = undefined;
+      return;
     }
-  };
+    const values = points.map(p => p.y);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const padding = (max - min) * 0.15 || 1;
+    chart.options.scales[axisId].min = min - padding;
+    chart.options.scales[axisId].max = max + padding;
+  });
+  chart.update('none');
+}
+
+function applyDefaultView(chart) {
+  const allPoints = chart.data.datasets.flatMap(ds => ds.data);
+  const range = computeDefaultRange(allPoints);
+  chart.options.scales.x.min = range.min;
+  chart.options.scales.x.max = range.max;
+  rescaleAxesToVisibleRange(chart, range.min.getTime(), range.max.getTime());
+}
+
+function resetChartZoom() {
+  if (!mainChart) return;
+  mainChart.resetZoom();
+  applyDefaultView(mainChart);
 }
 
 function initCharts() {
-  const ctxTemp = document.getElementById('tempChart').getContext('2d');
-  const ctxHum = document.getElementById('humChart').getContext('2d');
-  const ctxVpd = document.getElementById('vpdChart').getContext('2d');
-  charts.temp = new Chart(ctxTemp, { type: 'line', data: { datasets: [{ label: 'Temperature (°C)', data: [], borderColor: '#f87171', tension: 0.3 }] }, options: buildScaleOpts() });
-  charts.hum = new Chart(ctxHum, { type: 'line', data: { datasets: [{ label: 'Humidity (%)', data: [], borderColor: '#60a5fa', tension: 0.3 }] }, options: buildScaleOpts() });
-  charts.vpd = new Chart(ctxVpd, { type: 'line', data: { datasets: [{ label: 'VPD (kPa)', data: [], borderColor: '#4ade80', tension: 0.3 }] }, options: buildScaleOpts() });
+  const ctx = document.getElementById('mainChart').getContext('2d');
+
+  const datasets = METRICS.map(m => ({
+    label: m.label,
+    data: [],
+    borderColor: m.color,
+    backgroundColor: m.color,
+    yAxisID: m.axis,
+    tension: 0.3,
+    pointRadius: 0
+  }));
+
+  const scales = {
+    x: {
+      type: 'time',
+      time: { minUnit: 'second' },
+      ticks: { color: '#8ba394' }
+    }
+  };
+  METRICS.forEach((m, i) => {
+    scales[m.axis] = {
+      type: 'linear',
+      position: i === 0 ? 'left' : 'right',
+      ticks: { color: m.color },
+      grid: { drawOnChartArea: i === 0 },
+      offset: i > 1
+    };
+  });
+
+  mainChart = new Chart(ctx, {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true,
+      animation: false,
+      parsing: false,
+      interaction: { mode: 'nearest', axis: 'x', intersect: false },
+      scales,
+      plugins: {
+        legend: { labels: { color: '#e7efe9' } },
+        zoom: {
+          limits: { x: {} },
+          zoom: {
+            wheel: { enabled: true },
+            pinch: { enabled: true },
+            mode: 'x',
+            onZoomComplete: ({ chart }) => rescaleAxesToVisibleRange(chart)
+          },
+          pan: {
+            enabled: true,
+            mode: 'x',
+            onPanComplete: ({ chart }) => rescaleAxesToVisibleRange(chart)
+          }
+        }
+      }
+    }
+  });
 }
 
 function refreshAll() {
@@ -295,12 +339,22 @@ function refreshAll() {
   });
 
   authFetch(`/api/readings/${currentDevice}?hours=${LOAD_HOURS}`).then(r => r.json()).then(rows => {
-    charts.temp.data.datasets[0].data = rows.map(r => ({ x: new Date(r.ts), y: r.temperature }));
-    charts.temp.update('none');
-    charts.hum.data.datasets[0].data = rows.map(r => ({ x: new Date(r.ts), y: r.humidity }));
-    charts.hum.update('none');
-    charts.vpd.data.datasets[0].data = rows.map(r => ({ x: new Date(r.ts), y: r.vpd }));
-    charts.vpd.update('none');
+    const isFirstLoad = mainChart.data.datasets[0].data.length === 0;
+
+    METRICS.forEach((m, i) => {
+      mainChart.data.datasets[i].data = rows.map(r => ({ x: new Date(r.ts), y: r[m.key] }));
+    });
+
+    if (rows.length > 0) {
+      const times = rows.map(r => new Date(r.ts).getTime());
+      mainChart.options.plugins.zoom.limits.x = { min: Math.min(...times), max: Math.max(...times) };
+    }
+
+    if (isFirstLoad) {
+      applyDefaultView(mainChart);
+    } else {
+      mainChart.update('none');
+    }
   });
 
   authFetch(`/api/settings/${currentDevice}`).then(r => r.json()).then(s => {
