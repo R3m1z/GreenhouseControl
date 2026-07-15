@@ -18,7 +18,7 @@ import sqlite3
 import secrets
 import math
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Header, Depends
@@ -234,8 +234,26 @@ def list_devices(user: str = Depends(require_dashboard_auth)):
 
 
 @app.get("/api/readings/{device_id}")
-def get_readings(device_id: str, limit: int = 200, user: str = Depends(require_dashboard_auth)):
+def get_readings(
+    device_id: str,
+    hours: Optional[float] = None,
+    limit: int = 200,
+    user: str = Depends(require_dashboard_auth),
+):
+    """
+    If `hours` is given, returns all readings from the last N hours (for
+    time-scaled charts with pan/zoom). Otherwise falls back to the last
+    `limit` rows.
+    """
     with get_db() as db:
+        if hours is not None:
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+            rows = db.execute(
+                "SELECT ts, temperature, humidity, vpd FROM readings WHERE device_id = ? AND ts >= ? ORDER BY ts ASC",
+                (device_id, cutoff),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
         rows = db.execute(
             "SELECT ts, temperature, humidity, vpd FROM readings WHERE device_id = ? ORDER BY ts DESC LIMIT ?",
             (device_id, limit),

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Greenhouse Controller</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 <style>
   :root {
@@ -108,11 +109,13 @@
   </div>
 
   <canvas id="tempChart" height="80"></canvas>
-  <button onclick="charts.temp.resetZoom()" style="margin-bottom:16px;">Reset zoom</button>
+  <button onclick="charts.temp.resetZoom()" style="margin-bottom:16px;">Reset zoom (18h view)</button>
+
   <canvas id="humChart" height="80"></canvas>
-  <button onclick="charts.temp.resetZoom()" style="margin-bottom:16px;">Reset zoom</button>
+  <button onclick="charts.hum.resetZoom()" style="margin-bottom:16px;">Reset zoom (18h view)</button>
+
   <canvas id="vpdChart" height="80"></canvas>
-  <button onclick="charts.temp.resetZoom()" style="margin-bottom:16px;">Reset zoom</button>
+  <button onclick="charts.vpd.resetZoom()" style="margin-bottom:16px;">Reset zoom (18h view)</button>
 
   <div class="settings-card">
     <h3 style="margin-top:0;">Setpoints</h3>
@@ -195,32 +198,46 @@ function authFetch(url, opts = {}) {
   return fetch(url, opts);
 }
 
+const WINDOW_HOURS = 18;      // default visible window
+const LOAD_HOURS = 72;        // how much history is loaded so panning has data to reveal
+
+function buildScaleOpts() {
+  const now = new Date();
+  const windowStart = new Date(now.getTime() - WINDOW_HOURS * 3600 * 1000);
+  const loadStart = new Date(now.getTime() - LOAD_HOURS * 3600 * 1000);
+
+  return {
+    responsive: true,
+    animation: false,
+    parsing: false, // data already in {x, y} form
+    scales: {
+      x: {
+        type: 'time',
+        time: { unit: 'hour' },
+        min: windowStart,
+        max: now,
+        ticks: { color: '#8ba394' }
+      },
+      y: { ticks: { color: '#8ba394' } }
+    },
+    plugins: {
+      legend: { labels: { color: '#e7efe9' } },
+      zoom: {
+        limits: { x: { min: loadStart.getTime(), max: now.getTime() } },
+        zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'x' },
+        pan: { enabled: true, mode: 'x' }
+      }
+    }
+  };
+}
+
 function initCharts() {
   const ctxTemp = document.getElementById('tempChart').getContext('2d');
   const ctxHum = document.getElementById('humChart').getContext('2d');
   const ctxVpd = document.getElementById('vpdChart').getContext('2d');
-  const baseOpts = {
-    responsive: true,
-    animation: false,
-    scales: { x: { ticks: { color: '#8ba394' } }, y: { ticks: { color: '#8ba394' } } },
-    plugins: {
-        legend: { labels: { color: '#e7efe9' } },
-        zoom: {
-            zoom: {
-                wheel: { enabled: true },
-                pinch: { enabled: true },
-                mode: 'x'
-            },
-            pan: {
-                enabled: true,
-                mode: 'x'
-            }
-        }
-    }
-};
-  charts.temp = new Chart(ctxTemp, { type: 'line', data: { labels: [], datasets: [{ label: 'Temperature (°C)', data: [], borderColor: '#f87171', tension: 0.3 }] }, options: baseOpts });
-  charts.hum = new Chart(ctxHum, { type: 'line', data: { labels: [], datasets: [{ label: 'Humidity (%)', data: [], borderColor: '#60a5fa', tension: 0.3 }] }, options: baseOpts });
-  charts.vpd = new Chart(ctxVpd, { type: 'line', data: { labels: [], datasets: [{ label: 'VPD (kPa)', data: [], borderColor: '#4ade80', tension: 0.3 }] }, options: baseOpts });
+  charts.temp = new Chart(ctxTemp, { type: 'line', data: { datasets: [{ label: 'Temperature (°C)', data: [], borderColor: '#f87171', tension: 0.3 }] }, options: buildScaleOpts() });
+  charts.hum = new Chart(ctxHum, { type: 'line', data: { datasets: [{ label: 'Humidity (%)', data: [], borderColor: '#60a5fa', tension: 0.3 }] }, options: buildScaleOpts() });
+  charts.vpd = new Chart(ctxVpd, { type: 'line', data: { datasets: [{ label: 'VPD (kPa)', data: [], borderColor: '#4ade80', tension: 0.3 }] }, options: buildScaleOpts() });
 }
 
 function refreshAll() {
@@ -244,17 +261,13 @@ function refreshAll() {
     setDot('dotLights', c.lights);
   });
 
-  authFetch(`/api/readings/${currentDevice}?limit=100`).then(r => r.json()).then(rows => {
-    const labels = rows.map(r => new Date(r.ts).toLocaleTimeString());
-    charts.temp.data.labels = labels;
-    charts.temp.data.datasets[0].data = rows.map(r => r.temperature);
-    charts.temp.update();
-    charts.hum.data.labels = labels;
-    charts.hum.data.datasets[0].data = rows.map(r => r.humidity);
-    charts.hum.update();
-    charts.vpd.data.labels = labels;
-    charts.vpd.data.datasets[0].data = rows.map(r => r.vpd);
-    charts.vpd.update();
+  authFetch(`/api/readings/${currentDevice}?hours=${LOAD_HOURS}`).then(r => r.json()).then(rows => {
+    charts.temp.data.datasets[0].data = rows.map(r => ({ x: new Date(r.ts), y: r.temperature }));
+    charts.temp.update('none');
+    charts.hum.data.datasets[0].data = rows.map(r => ({ x: new Date(r.ts), y: r.humidity }));
+    charts.hum.update('none');
+    charts.vpd.data.datasets[0].data = rows.map(r => ({ x: new Date(r.ts), y: r.vpd }));
+    charts.vpd.update('none');
   });
 
   authFetch(`/api/settings/${currentDevice}`).then(r => r.json()).then(s => {
