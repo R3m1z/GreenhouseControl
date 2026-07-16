@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Greenhouse Controller</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1512; --card: #172019; --border: #263229; --text: #e7efe9; --muted: #8ba394;
+    --green: #4ade80; --red: #f87171; --amber: #fbbf24; --blue: #60a5fa; --grey: #4b5563;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); padding: 20px; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  h3 { margin: 0 0 12px; font-size: 1rem; }
+  .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 20px; }
+  select, button, input { background: var(--card); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 8px; font-size: 0.9rem; }
+  button { cursor: pointer; }
+  button.primary { background: var(--green); color: #0f1512; font-weight: 600; border: none; }
+  button.small { padding: 4px 10px; font-size: 0.75rem; }
+  .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 20px; flex-wrap: wrap; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .card .label { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  .card .value { font-size: 1.8rem; font-weight: 700; margin-top: 6px; }
+  .card .value.small { font-size: 1.1rem; }
+  canvas { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 12px; max-height: 320px; }
+  .equipment-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .equip-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
+  .equip-name { font-weight: 600; margin-bottom: 10px; }
+  .badge-row { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  .badge { padding: 3px 10px; border-radius: 999px; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+  .badge.on { background: var(--green); color: #0f1512; }
+  .badge.off { background: var(--grey); color: #e7efe9; }
+  .badge.auto { background: var(--blue); color: #0f1512; }
+  .badge.manual { background: var(--amber); color: #0f1512; }
+  .equip-controls { display: flex; gap: 8px; align-items: center; }
+  #authGate { max-width: 320px; margin: 80px auto; text-align: center; }
+  #authGate input { width: 100%; margin-bottom: 10px; }
+  .hidden { display: none; }
+  .stale { color: var(--red); }
+  .conn-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; background: var(--grey); }
+  .conn-dot.live { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .settings-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 20px; }
+  .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 12px 0; }
+  .settings-grid label { display: block; font-size: 0.75rem; color: var(--muted); margin-bottom: 4px; }
+  .settings-grid input { width: 100%; }
+</style>
+</head>
+<body>
+
+<div id="authGate">
+  <h1>Greenhouse Login</h1>
+  <p class="sub">Dashboard basic-auth credentials</p>
+  <input id="authUser" placeholder="username">
+  <input id="authPass" type="password" placeholder="password">
+  <button class="primary" onclick="doLogin()">Connect</button>
+  <p id="authError" class="sub stale"></p>
+</div>
+
+<div id="app" class="hidden">
+  <h1>🌿 Greenhouse Controller</h1>
+  <div class="sub" id="deviceMeta">—</div>
+
+  <div class="toolbar">
+    <select id="deviceSelect" onchange="switchDevice()"></select>
+    <button onclick="exportExcel()">Download Excel log</button>
+    <span class="sub" id="lastUpdated"></span>
+  </div>
+
+  <div class="grid">
+    <div class="card"><div class="label">Temperature</div><div class="value" id="valTemp">–</div></div>
+    <div class="card"><div class="label">Humidity</div><div class="value" id="valHum">–</div></div>
+    <div class="card"><div class="label">VPD (kPa)</div><div class="value" id="valVpd">–</div></div>
+    <div class="card"><div class="label">Last Update</div><div class="value small" id="valLastUpdate">–</div></div>
+    <div class="card"><div class="label">Connection</div><div class="value small"><span class="conn-dot" id="connDot"></span><span id="connText">—</span></div></div>
+  </div>
+
+  <canvas id="mainChart" height="90"></canvas>
+  <button onclick="resetChartZoom()" style="margin-bottom:20px;">Reset zoom (24h view)</button>
+
+  <h3>Equipment Status</h3>
+  <div class="equipment-grid" id="equipmentGrid"></div>
+
+  <div class="settings-card">
+    <h3>Setpoints</h3>
+    <div class="settings-grid">
+      <div><label>Temp min (°C)</label><input id="s_temp_min" type="number" step="0.1"></div>
+      <div><label>Temp max (°C)</label><input id="s_temp_max" type="number" step="0.1"></div>
+      <div><label>Humidity min (%)</label><input id="s_humidity_min" type="number" step="0.1"></div>
+      <div><label>Humidity max (%)</label><input id="s_humidity_max" type="number" step="0.1"></div>
+      <div><label>Fan stage margin (°C)</label><input id="s_fan_stage_margin" type="number" step="0.1"></div>
+      <div><label>Irrigation duration (min)</label><input id="s_irrigation_duration_minutes" type="number" step="1"></div>
+      <div><label>Irrigation interval (hrs)</label><input id="s_irrigation_interval_hours" type="number" step="0.5"></div>
+    </div>
+    <button class="primary" onclick="saveSettings()">Save Settings</button>
+    <span id="saveStatus" class="sub"></span>
+  </div>
+</div>
+
+<script>
+let authHeader = null;
+let currentDevice = null;
+let mainChart = null;
+let pollTimer = null;
+
+const WINDOW_HOURS = 24;
+const LOAD_HOURS = 96;
+
+const METRICS = [
+  { key: 'temperature', label: 'Temperature (°C)', color: '#f87171', axis: 'yTemp' },
+  { key: 'humidity',    label: 'Humidity (%)',      color: '#60a5fa', axis: 'yHum'  },
+  { key: 'vpd',         label: 'VPD (kPa)',         color: '#4ade80', axis: 'yVpd'  }
+];
+
+const RELAY_LABELS = {
+  heater: 'Heater', fan1: 'Fan 1', fan2: 'Fan 2', fan3: 'Fan 3',
+  wing_flap: 'Wing Flap', curtains: 'Curtains', irrigation: 'Irrigation Timer'
+};
+
+function doLogin() {
+  const u = document.getElementById('authUser').value;
+  const p = document.getElementById('authPass').value;
+  authHeader = 'Basic ' + btoa(u + ':' + p);
+  fetch('/api/devices', { headers: { Authorization: authHeader } })
+    .then(r => { if (!r.ok) throw new Error('bad credentials'); return r.json(); })
+    .then(devices => {
+      document.getElementById('authGate').classList.add('hidden');
+      document.getElementById('app').classList.remove('hidden');
+      populateDevices(devices);
+    })
+    .catch(() => { document.getElementById('authError').textContent = 'Login failed. Check credentials.'; });
+}
+
+function populateDevices(devices) {
+  const sel = document.getElementById('deviceSelect');
+  sel.innerHTML = '';
+  if (devices.length === 0) {
+    sel.innerHTML = '<option>No devices yet — register one via POST /api/devices</option>';
+    return;
+  }
+  devices.forEach(d => {
+    const opt = document.createElement('option');
+    opt.value = d.id;
+    opt.textContent = `${d.name} (${d.id})`;
+    sel.appendChild(opt);
+  });
+  currentDevice = devices[0].id;
+  initChart();
+  buildEquipmentCards();
+  refreshAll();
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(refreshAll, 2000);  // matches 2s sensor interval
+}
+
+function switchDevice() {
+  currentDevice = document.getElementById('deviceSelect').value;
+  if (mainChart) mainChart.data.datasets.forEach(ds => ds.data = []);
+  refreshAll();
+}
+
+function authFetch(url, opts = {}) {
+  opts.headers = Object.assign({}, opts.headers, { Authorization: authHeader });
+  return fetch(url, opts);
+}
+
+// ---------------- Chart ----------------
+
+function computeDefaultRange(allPoints) {
+  const now = new Date();
+  if (!allPoints.length) return { min: new Date(now.getTime() - WINDOW_HOURS * 3600 * 1000), max: now };
+  const times = allPoints.map(p => p.x.getTime());
+  const earliest = Math.min(...times);
+  const latest = Math.max(...times);
+  const windowStart = Math.max(earliest, latest - WINDOW_HOURS * 3600 * 1000);
+  return { min: new Date(windowStart), max: new Date(latest) };
+}
+
+function rescaleAxesToVisibleRange(chart, xMinOverride, xMaxOverride) {
+  const xMin = xMinOverride !== undefined ? xMinOverride : chart.scales.x.min;
+  const xMax = xMaxOverride !== undefined ? xMaxOverride : chart.scales.x.max;
+  chart.data.datasets.forEach(ds => {
+    const points = ds.data.filter(p => {
+      const t = p.x instanceof Date ? p.x.getTime() : p.x;
+      return t >= xMin && t <= xMax;
+    });
+    const axisId = ds.yAxisID;
+    if (points.length === 0) {
+      chart.options.scales[axisId].min = undefined;
+      chart.options.scales[axisId].max = undefined;
+      return;
+    }
+    const values = points.map(p => p.y);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const padding = (max - min) * 0.15 || 1;
+    chart.options.scales[axisId].min = min - padding;
+    chart.options.scales[axisId].max = max + padding;
+  });
+  chart.update('none');
+}
+
+function applyDefaultView(chart) {
+  const allPoints = chart.data.datasets.flatMap(ds => ds.data);
+  const range = computeDefaultRange(allPoints);
+  chart.options.scales.x.min = range.min;
+  chart.options.scales.x.max = range.max;
+  rescaleAxesToVisibleRange(chart, range.min.getTime(), range.max.getTime());
+}
+
+function resetChartZoom() {
+  if (!mainChart) return;
+  mainChart.resetZoom();
+  applyDefaultView(mainChart);
+}
+
+function initChart() {
+  const ctx = document.getElementById('mainChart').getContext('2d');
+  const datasets = METRICS.map(m => ({ label: m.label, data: [], borderColor: m.color, backgroundColor: m.color, yAxisID: m.axis, tension: 0.3, pointRadius: 0 }));
+  const scales = { x: { type: 'time', time: { minUnit: 'second' }, ticks: { color: '#8ba394' } } };
+  METRICS.forEach((m, i) => {
+    scales[m.axis] = { type: 'linear', position: i === 0 ? 'left' : 'right', ticks: { color: m.color }, grid: { drawOnChartArea: i === 0 }, offset: i > 1 };
+  });
+  mainChart = new Chart(ctx, {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true, animation: false, parsing: false,
+      interaction: { mode: 'nearest', axis: 'x', intersect: false },
+      scales,
+      plugins: {
+        legend: { labels: { color: '#e7efe9' } },
+        zoom: {
+          limits: { x: {} },
+          zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'x', onZoomComplete: ({ chart }) => rescaleAxesToVisibleRange(chart) },
+          pan: { enabled: true, mode: 'x', onPanComplete: ({ chart }) => rescaleAxesToVisibleRange(chart) }
+        }
+      }
+    }
+  });
+}
+
+// ---------------- Equipment panel ----------------
+
+function buildEquipmentCards() {
+  const grid = document.getElementById('equipmentGrid');
+  grid.innerHTML = '';
+  Object.keys(RELAY_LABELS).forEach(key => {
+    const card = document.createElement('div');
+    card.className = 'equip-card';
+    card.id = `equip-${key}`;
+    card.innerHTML = `
+      <div class="equip-name">${RELAY_LABELS[key]}</div>
+      <div class="badge-row">
+        <span class="badge off" id="state-${key}">OFF</span>
+        <span class="badge auto" id="mode-${key}">AUTO</span>
+      </div>
+      <div class="equip-controls">
+        <button class="small" onclick="toggleMode('${key}')" id="modeBtn-${key}">Switch to Manual</button>
+        <button class="small hidden" onclick="toggleManualState('${key}')" id="manualBtn-${key}">Flip</button>
+      </div>
+    `;
+    grid.appendChild(card);
+  });
+}
+
+let lastEquipmentData = {};
+
+function renderEquipment(data) {
+  lastEquipmentData = data;
+  Object.keys(RELAY_LABELS).forEach(key => {
+    const info = data[key];
+    if (!info) return;
+    const stateEl = document.getElementById(`state-${key}`);
+    const modeEl = document.getElementById(`mode-${key}`);
+    const modeBtn = document.getElementById(`modeBtn-${key}`);
+    const manualBtn = document.getElementById(`manualBtn-${key}`);
+
+    stateEl.textContent = info.commanded_state ? 'ON' : 'OFF';
+    stateEl.className = 'badge ' + (info.commanded_state ? 'on' : 'off');
+
+    modeEl.textContent = info.mode === 'manual' ? 'MANUAL' : 'AUTO';
+    modeEl.className = 'badge ' + (info.mode === 'manual' ? 'manual' : 'auto');
+
+    modeBtn.textContent = info.mode === 'manual' ? 'Switch to Auto' : 'Switch to Manual';
+    manualBtn.classList.toggle('hidden', info.mode !== 'manual');
+  });
+}
+
+function toggleMode(key) {
+  const current = lastEquipmentData[key];
+  const newMode = current && current.mode === 'manual' ? 'auto' : 'manual';
+  authFetch(`/api/relay/${currentDevice}/${key}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: newMode })
+  }).then(() => refreshEquipment());
+}
+
+function toggleManualState(key) {
+  const current = lastEquipmentData[key];
+  const newState = !(current && current.commanded_state);
+  authFetch(`/api/relay/${currentDevice}/${key}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ manual_state: newState })
+  }).then(() => refreshEquipment());
+}
+
+function refreshEquipment() {
+  authFetch(`/api/status/${currentDevice}`).then(r => r.json()).then(renderEquipment);
+}
+
+// ---------------- Main refresh loop ----------------
+
+function refreshAll() {
+  if (!currentDevice) return;
+  document.getElementById('deviceMeta').textContent = `Device: ${currentDevice}`;
+
+  authFetch(`/api/current/${currentDevice}`).then(r => r.json()).then(data => {
+    if (!data.reading) {
+      document.getElementById('valTemp').textContent = 'no data';
+      setConnection(false);
+      return;
+    }
+    document.getElementById('valTemp').textContent = data.reading.temperature.toFixed(1) + ' °C';
+    document.getElementById('valHum').textContent = data.reading.humidity.toFixed(1) + ' %';
+    document.getElementById('valVpd').textContent = data.reading.vpd.toFixed(2);
+
+    const readingTime = new Date(data.reading.ts);
+    document.getElementById('valLastUpdate').textContent = readingTime.toLocaleTimeString();
+
+    const secondsSinceReading = (Date.now() - readingTime.getTime()) / 1000;
+    setConnection(secondsSinceReading < 15);  // stale if no data for 15s+ (interval is 2s)
+  });
+
+  refreshEquipment();
+
+  authFetch(`/api/history/${currentDevice}?hours=${LOAD_HOURS}`).then(r => r.json()).then(rows => {
+    const isFirstLoad = mainChart.data.datasets[0].data.length === 0;
+    METRICS.forEach((m, i) => {
+      mainChart.data.datasets[i].data = rows.map(r => ({ x: new Date(r.ts), y: r[m.key] }));
+    });
+    if (rows.length > 0) {
+      const times = rows.map(r => new Date(r.ts).getTime());
+      mainChart.options.plugins.zoom.limits.x = { min: Math.min(...times), max: Math.max(...times) };
+    }
+    if (isFirstLoad) applyDefaultView(mainChart);
+    else mainChart.update('none');
+  });
+
+  authFetch(`/api/settings/${currentDevice}`).then(r => r.json()).then(s => {
+    document.getElementById('s_temp_min').value = s.temp_min;
+    document.getElementById('s_temp_max').value = s.temp_max;
+    document.getElementById('s_humidity_min').value = s.humidity_min;
+    document.getElementById('s_humidity_max').value = s.humidity_max;
+    document.getElementById('s_fan_stage_margin').value = s.fan_stage_margin;
+    document.getElementById('s_irrigation_duration_minutes').value = s.irrigation_duration_minutes;
+    document.getElementById('s_irrigation_interval_hours').value = s.irrigation_interval_hours;
+  });
+}
+
+function setConnection(live) {
+  document.getElementById('connDot').classList.toggle('live', live);
+  document.getElementById('connText').textContent = live ? 'Live' : 'Stale / Offline';
+}
+
+function saveSettings() {
+  const payload = {
+    temp_min: parseFloat(document.getElementById('s_temp_min').value),
+    temp_max: parseFloat(document.getElementById('s_temp_max').value),
+    humidity_min: parseFloat(document.getElementById('s_humidity_min').value),
+    humidity_max: parseFloat(document.getElementById('s_humidity_max').value),
+    fan_stage_margin: parseFloat(document.getElementById('s_fan_stage_margin').value),
+    irrigation_duration_minutes: parseFloat(document.getElementById('s_irrigation_duration_minutes').value),
+    irrigation_interval_hours: parseFloat(document.getElementById('s_irrigation_interval_hours').value)
+  };
+  authFetch(`/api/settings/${currentDevice}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+  }).then(r => r.json()).then(() => {
+    document.getElementById('saveStatus').textContent = 'Saved ✓';
+    setTimeout(() => document.getElementById('saveStatus').textContent = '', 2000);
+  });
+}
+
+function exportExcel() {
+  if (!currentDevice) return;
+  const url = `/api/export/excel/${currentDevice}`;
+  fetch(url, { headers: { Authorization: authHeader } })
+    .then(r => {
+      if (!r.ok) throw new Error('No Excel log yet');
+      return r.blob();
+    })
+    .then(blob => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${currentDevice}_sensor_data.xlsx`;
+      a.click();
+    })
+    .catch(() => alert('No Excel log exists yet for this device.'));
+}
+</script>
+</body>
+</html>
